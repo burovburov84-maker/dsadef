@@ -104,10 +104,10 @@ async def on_message(message: discord.Message):
         ] + history_messages
 
         try:
-            # Вызов бесплатной модели Llama 3.3 70B через OpenRouter
+            # Используем бесплатную модель Gemini 2.0 Flash через OpenRouter
             response = await asyncio.to_thread(
                 client.chat.completions.create,
-                model="meta-llama/llama-3.3-70b-instruct:free",
+                model="google/gemini-2.0-flash-exp:free",
                 messages=messages_payload,
                 temperature=0.8,
                 max_tokens=1024

@@ -2,8 +2,7 @@ import os
 import asyncio
 import discord
 from discord.ext import commands
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 TARGET_CHANNEL_ID = 1535672154946019438
 ALLOWED_ROLE_ID = 1502023032271671497
@@ -13,7 +12,12 @@ intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+# Инициализация OpenAI-клиента с эндпоинтом DeepSeek
+deepseek_client = OpenAI(
+    api_key=os.getenv("DEEPSEEK_API_KEY"),
+    base_url="https://api.deepseek.com"
+)
 
 PROMPTS = {
     "dobri": (
@@ -36,15 +40,8 @@ PROMPTS = {
     )
 }
 
-SAFETY_SETTINGS = [
-    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-]
-
 current_mode = "toxic"
-history_contents = []
+history_messages = []
 
 def check_permission(ctx: commands.Context) -> bool:
     if not isinstance(ctx.author, discord.Member):
@@ -78,17 +75,17 @@ async def cmd_toxic(ctx: commands.Context):
 
 @bot.command(name="cc")
 async def cmd_cc(ctx: commands.Context):
-    global history_contents
+    global history_messages
     if not check_permission(ctx):
         await ctx.send("❌ У вас нет прав для очистки истории.")
         return
 
-    history_contents.clear()
+    history_messages.clear()
     await ctx.send("🧹 История диалога полностью очищена!")
 
 @bot.event
 async def on_ready():
-    print(f"Бот {bot.user} запущен и готов к работе!")
+    print(f"Бот {bot.user} запущен и готов к работе через DeepSeek API!")
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -100,47 +97,41 @@ async def on_message(message: discord.Message):
     if message.channel.id == TARGET_CHANNEL_ID and not message.content.startswith("!"):
         user_text = f"{message.author.display_name}: {message.content}"
         
-        history_contents.append(
-            types.Content(role="user", parts=[types.Part.from_text(text=user_text)])
-        )
+        # Добавляем сообщение в историю
+        history_messages.append({"role": "user", "content": user_text})
 
-        config = types.GenerateContentConfig(
-            system_instruction=PROMPTS[current_mode],
-            safety_settings=SAFETY_SETTINGS,
-        )
+        # Собираем массив сообщений с системным промптом
+        messages_payload = [
+            {"role": "system", "content": PROMPTS[current_mode]}
+        ] + history_messages
 
         try:
-            # Точный системный идентификатор модели
-            response = await asyncio.wait_for(
-                gemini_client.aio.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=history_contents,
-                    config=config
-                ),
-                timeout=12.0
+            # Вызов DeepSeek API
+            response = await asyncio.to_thread(
+                deepseek_client.chat.completions.create,
+                model="deepseek-chat",
+                messages=messages_payload,
+                temperature=1.0,
+                max_tokens=1024
             )
 
-            reply_text = response.text if response and response.text else None
+            reply_text = response.choices[0].message.content
 
             if reply_text:
-                history_contents.append(
-                    types.Content(role="model", parts=[types.Part.from_text(text=reply_text)])
-                )
+                history_messages.append({"role": "assistant", "content": reply_text})
+                
+                # Делим слишком длинные ответы на части по 1900 символов
                 for i in range(0, len(reply_text), 1900):
                     await message.channel.send(reply_text[i:i+1900])
             else:
-                if history_contents:
-                    history_contents.pop()
-                await message.channel.send("*(Запрос заблокирован фильтрами Gemini)*")
+                if history_messages:
+                    history_messages.pop()
+                await message.channel.send("*(Пустой ответ)*")
 
-        except asyncio.TimeoutError:
-            if history_contents:
-                history_contents.pop()
-            await message.channel.send("⚠️ Таймаут: Gemini не ответила вовремя.")
         except Exception as e:
-            if history_contents:
-                history_contents.pop()
-            print(f"[ОШИБКА]: {e}")
-            await message.channel.send(f"⚠️ Ошибка: `{e}`")
+            if history_messages:
+                history_messages.pop()
+            print(f"[ОШИБКА DEEPSEEK]: {e}")
+            await message.channel.send(f"⚠️ Ошибка API DeepSeek: `{e}`")
 
 bot.run(os.getenv("DISCORD_TOKEN"))

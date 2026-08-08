@@ -88,7 +88,7 @@ async def cmd_cc(ctx: commands.Context):
 
 @bot.event
 async def on_ready():
-    print(f"Бот {bot.user} запущен и ready!")
+    print(f"Бот {bot.user} запущен и готов к работе!")
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -100,7 +100,6 @@ async def on_message(message: discord.Message):
     if message.channel.id == TARGET_CHANNEL_ID and not message.content.startswith("!"):
         user_text = f"{message.author.display_name}: {message.content}"
         
-        # Заносим сообщение в историю
         history_contents.append(
             types.Content(role="user", parts=[types.Part.from_text(text=user_text)])
         )
@@ -111,14 +110,14 @@ async def on_message(message: discord.Message):
         )
 
         try:
-            # Запрос с использованием модели gemini-1.5-flash
+            # Точный системный идентификатор модели
             response = await asyncio.wait_for(
                 gemini_client.aio.models.generate_content(
-                    model="gemini-1.5-flash",
+                    model="gemini-2.0-flash",
                     contents=history_contents,
                     config=config
                 ),
-                timeout=10.0
+                timeout=12.0
             )
 
             reply_text = response.text if response and response.text else None
@@ -132,12 +131,12 @@ async def on_message(message: discord.Message):
             else:
                 if history_contents:
                     history_contents.pop()
-                await message.channel.send("*(Пустой ответ или отклонён фильтром)*")
+                await message.channel.send("*(Запрос заблокирован фильтрами Gemini)*")
 
         except asyncio.TimeoutError:
             if history_contents:
                 history_contents.pop()
-            await message.channel.send("⚠️ Таймаут: Gemini не ответила за 10 секунд.")
+            await message.channel.send("⚠️ Таймаут: Gemini не ответила вовремя.")
         except Exception as e:
             if history_contents:
                 history_contents.pop()

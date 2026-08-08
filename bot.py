@@ -1,13 +1,24 @@
 import os
+import asyncio
 import discord
-from discord import app_commands
+from discord.ext import commands
 from google import genai
 from google.genai import types
 
 TARGET_CHANNEL_ID = 1535672154946019438
 ALLOWED_ROLE_ID = 1502023032271671497
 
-# Определение системных инструкций
+# Настройка интентов
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+
+# Используем префикс ! для команд (работает 100% без слэш-меню)
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Инициализация Gemini
+gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
 PROMPTS = {
     "dobri": (
         "Ты — максимально вежливый, дружелюбный и отзывчивый собеседник. "
@@ -29,21 +40,6 @@ PROMPTS = {
     )
 }
 
-class MotionBot(discord.Client):
-    def __init__(self):
-        # Используем безопасный набор интентов, чтобы не падало с ошибкой
-        intents = discord.Intents.default()
-        intents.message_content = True
-        intents.members = True
-        super().__init__(intents=intents)
-        self.tree = app_commands.CommandTree(self)
-
-bot = MotionBot()
-
-# Инициализация Gemini
-gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-# Хранилище настроек и истории
 current_mode = "toxic"
 chat_session = None
 
@@ -58,52 +54,49 @@ def get_or_create_chat():
         )
     return chat_session
 
-def check_permission(interaction: discord.Interaction) -> bool:
-    if not isinstance(interaction.user, discord.Member):
+def check_permission(ctx: commands.Context) -> bool:
+    if not isinstance(ctx.author, discord.Member):
         return False
-    return any(role.id == ALLOWED_ROLE_ID for role in interaction.user.roles)
+    return any(role.id == ALLOWED_ROLE_ID for role in ctx.author.roles)
 
-async def change_mode(interaction: discord.Interaction, new_mode: str, mode_name: str):
+async def change_mode(ctx: commands.Context, new_mode: str, mode_name: str):
     global current_mode, chat_session
-    if not check_permission(interaction):
-        await interaction.response.send_message("❌ У вас нет прав для изменения режима бота.", ephemeral=True)
+    if not check_permission(ctx):
+        await ctx.send("❌ У вас нет прав для изменения режима бота.")
         return
 
     current_mode = new_mode
-    
-    # Смена режима и пересоздание чата
     chat_session = gemini_client.chats.create(
         model="gemini-2.5-flash",
         config=types.GenerateContentConfig(
             system_instruction=PROMPTS[current_mode]
         )
     )
-    
-    await interaction.response.send_message(f"✅ Режим общения изменен на: **{mode_name}**")
+    await ctx.send(f"✅ Режим общения изменен на: **{mode_name}**")
 
-# --- Слэш-команды ---
+# --- Команды через префикс ! ---
 
-@bot.tree.command(name="dobri", description="Переключить на нормальное/доброе общение")
-async def cmd_dobri(interaction: discord.Interaction):
-    await change_mode(interaction, "dobri", "Обычное доброе общение")
+@bot.command(name="dobri")
+async def cmd_dobri(ctx: commands.Context):
+    await change_mode(ctx, "dobri", "Обычное доброе общение")
 
-@bot.tree.command(name="motiontox", description="Переключить на токсичное общение про Motion Project CRMP")
-async def cmd_motiontox(interaction: discord.Interaction):
-    await change_mode(interaction, "motiontox", "Токсичное общение (Motion Project CRMP)")
+@bot.command(name="motiontox")
+async def cmd_motiontox(ctx: commands.Context):
+    await change_mode(ctx, "motiontox", "Токсичное общение (Motion Project CRMP)")
 
-@bot.tree.command(name="motiondobri", description="Переключить на доброе общение про Motion Project CRMP")
-async def cmd_motiondobri(interaction: discord.Interaction):
-    await change_mode(interaction, "motiondobri", "Доброе общение (Motion Project CRMP)")
+@bot.command(name="motiondobri")
+async def cmd_motiondobri(ctx: commands.Context):
+    await change_mode(ctx, "motiondobri", "Доброе общение (Motion Project CRMP)")
 
-@bot.tree.command(name="toxic", description="Переключить на токсичное общение с матами")
-async def cmd_toxic(interaction: discord.Interaction):
-    await change_mode(interaction, "toxic", "Токсичное общение с жестким матом")
+@bot.command(name="toxic")
+async def cmd_toxic(ctx: commands.Context):
+    await change_mode(ctx, "toxic", "Токсичное общение с жестким матом")
 
-@bot.tree.command(name="cc", description="Очистить историю контекста диалога")
-async def cmd_cc(interaction: discord.Interaction):
+@bot.command(name="cc")
+async def cmd_cc(ctx: commands.Context):
     global chat_session
-    if not check_permission(interaction):
-        await interaction.response.send_message("❌ У вас нет прав для очистки истории.", ephemeral=True)
+    if not check_permission(ctx):
+        await ctx.send("❌ У вас нет прав для очистки истории.")
         return
 
     chat_session = gemini_client.chats.create(
@@ -112,36 +105,36 @@ async def cmd_cc(interaction: discord.Interaction):
             system_instruction=PROMPTS[current_mode]
         )
     )
-    await interaction.response.send_message("🧹 История диалога полностью очищена!")
+    await ctx.send("🧹 История диалога полностью очищена!")
 
-# --- События ---
+# --- Обработка сообщений ---
 
 @bot.event
 async def on_ready():
-    # Принудительная синхронизация команд при старте
-    try:
-        synced = await bot.tree.sync()
-        print(f"Успешно синхронизировано {len(synced)} слэш-команд.")
-    except Exception as e:
-        print(f"Ошибка синхронизации команд: {e}")
-        
-    print(f"Бот {bot.user} полностью запущен и готов к работе!")
+    print(f"Бот {bot.user} успешно запущен и готов к работе!")
 
 @bot.event
 async def on_message(message: discord.Message):
     if message.author == bot.user:
         return
 
-    if message.channel.id == TARGET_CHANNEL_ID:
+    # Обязательно сначала обрабатываем команды (!toxic, !cc и т.д.)
+    await bot.process_commands(message)
+
+    # Общение только в целевом канале
+    if message.channel.id == TARGET_CHANNEL_ID and not message.content.startswith("!"):
         try:
             async with message.channel.typing():
                 chat = get_or_create_chat()
                 prompt = f"{message.author.display_name}: {message.content}"
-                response = chat.send_message(prompt)
+                
+                # Вызываем генерацию ответа в отдельном потоке (asyncio.to_thread), 
+                # чтобы не блокировать выполнение бота
+                response = await asyncio.to_thread(chat.send_message, prompt)
 
                 if response.text:
                     await message.channel.send(response.text)
         except Exception as e:
-            print(f"Ошибка генерации ответа: {e}")
+            print(f"Ошибка при ответе Gemini: {e}")
 
 bot.run(os.getenv("DISCORD_TOKEN"))

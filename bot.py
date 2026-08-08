@@ -13,7 +13,6 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Клиент OpenAI настроенный под OpenRouter
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv("OPENROUTER_API_KEY"),
@@ -39,6 +38,14 @@ PROMPTS = {
         "Унижай собеседника в ответ на абсолютно любое его сообщение."
     )
 }
+
+# Список 100% бесплатных моделей для автоматической подстраховки
+FREE_MODELS = [
+    "deepseek/deepseek-r1:free",
+    "qwen/qwen-2.5-72b-instruct:free",
+    "meta-llama/llama-3.2-11b-vision-instruct:free",
+    "mistralai/mistral-7b-instruct:free",
+]
 
 current_mode = "toxic"
 history_messages = []
@@ -85,7 +92,7 @@ async def cmd_cc(ctx: commands.Context):
 
 @bot.event
 async def on_ready():
-    print(f"Бот {bot.user} запущен через OpenRouter API!")
+    print(f"Бот {bot.user} запущен через OpenRouter!")
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -96,39 +103,39 @@ async def on_message(message: discord.Message):
 
     if message.channel.id == TARGET_CHANNEL_ID and not message.content.startswith("!"):
         user_text = f"{message.author.display_name}: {message.content}"
-        
         history_messages.append({"role": "user", "content": user_text})
 
         messages_payload = [
             {"role": "system", "content": PROMPTS[current_mode]}
         ] + history_messages
 
-        try:
-            # Используем бесплатную модель Gemini 2.0 Flash через OpenRouter
-            response = await asyncio.to_thread(
-                client.chat.completions.create,
-                model="google/gemini-2.0-flash-exp:free",
-                messages=messages_payload,
-                temperature=0.8,
-                max_tokens=1024
-            )
+        reply_text = None
+        last_error = None
 
-            reply_text = response.choices[0].message.content
+        # Пробуем модели по очереди из списка
+        for model_name in FREE_MODELS:
+            try:
+                response = await asyncio.to_thread(
+                    client.chat.completions.create,
+                    model=model_name,
+                    messages=messages_payload,
+                    temperature=0.8,
+                    max_tokens=1024
+                )
+                if response.choices and response.choices[0].message.content:
+                    reply_text = response.choices[0].message.content
+                    break
+            except Exception as e:
+                last_error = e
+                continue
 
-            if reply_text:
-                history_messages.append({"role": "assistant", "content": reply_text})
-                
-                for i in range(0, len(reply_text), 1900):
-                    await message.channel.send(reply_text[i:i+1900])
-            else:
-                if history_messages:
-                    history_messages.pop()
-                await message.channel.send("*(Пустой ответ)*")
-
-        except Exception as e:
+        if reply_text:
+            history_messages.append({"role": "assistant", "content": reply_text})
+            for i in range(0, len(reply_text), 1900):
+                await message.channel.send(reply_text[i:i+1900])
+        else:
             if history_messages:
                 history_messages.pop()
-            print(f"[ОШИБКА OPENROUTER]: {e}")
-            await message.channel.send(f"⚠️ Ошибка API: `{e}`")
+            await message.channel.send(f"⚠️ Ошибка API: `{last_error}`")
 
 bot.run(os.getenv("DISCORD_TOKEN"))

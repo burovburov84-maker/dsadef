@@ -111,10 +111,10 @@ async def on_message(message: discord.Message):
         )
 
         try:
-            # Прямой вызов API с ограничением по времени
+            # Запрос с использованием модели gemini-1.5-flash
             response = await asyncio.wait_for(
                 gemini_client.aio.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-1.5-flash",
                     contents=history_contents,
                     config=config
                 ),

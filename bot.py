@@ -13,10 +13,10 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Инициализация OpenAI-клиента с эндпоинтом DeepSeek
-deepseek_client = OpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com"
+# Клиент OpenAI настроенный под OpenRouter
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY"),
 )
 
 PROMPTS = {
@@ -85,7 +85,7 @@ async def cmd_cc(ctx: commands.Context):
 
 @bot.event
 async def on_ready():
-    print(f"Бот {bot.user} запущен и готов к работе через DeepSeek API!")
+    print(f"Бот {bot.user} запущен через OpenRouter API!")
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -97,21 +97,19 @@ async def on_message(message: discord.Message):
     if message.channel.id == TARGET_CHANNEL_ID and not message.content.startswith("!"):
         user_text = f"{message.author.display_name}: {message.content}"
         
-        # Добавляем сообщение в историю
         history_messages.append({"role": "user", "content": user_text})
 
-        # Собираем массив сообщений с системным промптом
         messages_payload = [
             {"role": "system", "content": PROMPTS[current_mode]}
         ] + history_messages
 
         try:
-            # Вызов DeepSeek API
+            # Вызов бесплатной модели Llama 3.3 70B через OpenRouter
             response = await asyncio.to_thread(
-                deepseek_client.chat.completions.create,
-                model="deepseek-chat",
+                client.chat.completions.create,
+                model="meta-llama/llama-3.3-70b-instruct:free",
                 messages=messages_payload,
-                temperature=1.0,
+                temperature=0.8,
                 max_tokens=1024
             )
 
@@ -120,7 +118,6 @@ async def on_message(message: discord.Message):
             if reply_text:
                 history_messages.append({"role": "assistant", "content": reply_text})
                 
-                # Делим слишком длинные ответы на части по 1900 символов
                 for i in range(0, len(reply_text), 1900):
                     await message.channel.send(reply_text[i:i+1900])
             else:
@@ -131,7 +128,7 @@ async def on_message(message: discord.Message):
         except Exception as e:
             if history_messages:
                 history_messages.pop()
-            print(f"[ОШИБКА DEEPSEEK]: {e}")
-            await message.channel.send(f"⚠️ Ошибка API DeepSeek: `{e}`")
+            print(f"[ОШИБКА OPENROUTER]: {e}")
+            await message.channel.send(f"⚠️ Ошибка API: `{e}`")
 
 bot.run(os.getenv("DISCORD_TOKEN"))

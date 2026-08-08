@@ -1,5 +1,4 @@
 import os
-import asyncio
 import discord
 from discord.ext import commands
 from google import genai
@@ -8,15 +7,13 @@ from google.genai import types
 TARGET_CHANNEL_ID = 1535672154946019438
 ALLOWED_ROLE_ID = 1502023032271671497
 
-# Настройка интентов
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-# Используем префикс ! для команд (работает 100% без слэш-меню)
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Инициализация Gemini
+# Инициализация клиента Gemini
 gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 PROMPTS = {
@@ -26,8 +23,8 @@ PROMPTS = {
     ),
     "motiontox": (
         "Ты — максимально токсичный, агрессивный и злой игрок/админ проекта Motion Project CRMP. "
-        "Отвечай с жестким матом (нахуй, захуй и т.д.), поливай грязью, рофли над игроками, "
-        "унижай за любой вопрос о Motion Project CRMP и общайся в стиле самых сгоревших игроков CRMP."
+        "Отвечай с жестким матом, поливай грязью, рофли над игроками, "
+        "унижай за любой вопрос о Motion Project CRMP и общайся в стиле сгоревших игроков."
     ),
     "motiondobri": (
         "Ты — самый добрый, позитивный и любящий фанат и помощник проекта Motion Project CRMP. "
@@ -35,24 +32,19 @@ PROMPTS = {
     ),
     "toxic": (
         "Ты — максимально токсичный, агрессивный и грубый собеседник. "
-        "Твоя единственная цель — жестко обкладывать матом (нахуй, захуй и т.д.), стебать, унижать "
-        "и посылать пользователя в ответ на абсолютно любое его сообщение на любую тему."
+        "Твоя цель — жестко обкладывать матом, стебать, унижать и посылать пользователя в ответ на абсолютно любое его сообщение."
     )
 }
 
-current_mode = "toxic"
-chat_session = None
+SAFETY_SETTINGS = [
+    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+]
 
-def get_or_create_chat():
-    global chat_session
-    if chat_session is None:
-        chat_session = gemini_client.chats.create(
-            model="gemini-2.5-flash",
-            config=types.GenerateContentConfig(
-                system_instruction=PROMPTS[current_mode]
-            )
-        )
-    return chat_session
+current_mode = "toxic"
+history_contents = []  # Массив для хранения истории диалога
 
 def check_permission(ctx: commands.Context) -> bool:
     if not isinstance(ctx.author, discord.Member):
@@ -60,21 +52,15 @@ def check_permission(ctx: commands.Context) -> bool:
     return any(role.id == ALLOWED_ROLE_ID for role in ctx.author.roles)
 
 async def change_mode(ctx: commands.Context, new_mode: str, mode_name: str):
-    global current_mode, chat_session
+    global current_mode
     if not check_permission(ctx):
         await ctx.send("❌ У вас нет прав для изменения режима бота.")
         return
 
     current_mode = new_mode
-    chat_session = gemini_client.chats.create(
-        model="gemini-2.5-flash",
-        config=types.GenerateContentConfig(
-            system_instruction=PROMPTS[current_mode]
-        )
-    )
     await ctx.send(f"✅ Режим общения изменен на: **{mode_name}**")
 
-# --- Команды через префикс ! ---
+# --- Команды ---
 
 @bot.command(name="dobri")
 async def cmd_dobri(ctx: commands.Context):
@@ -90,21 +76,16 @@ async def cmd_motiondobri(ctx: commands.Context):
 
 @bot.command(name="toxic")
 async def cmd_toxic(ctx: commands.Context):
-    await change_mode(ctx, "toxic", "Токсичное общение с жестким матом")
+    await change_mode(ctx, "toxic", "Токсичное общение с матом")
 
 @bot.command(name="cc")
 async def cmd_cc(ctx: commands.Context):
-    global chat_session
+    global history_contents
     if not check_permission(ctx):
         await ctx.send("❌ У вас нет прав для очистки истории.")
         return
 
-    chat_session = gemini_client.chats.create(
-        model="gemini-2.5-flash",
-        config=types.GenerateContentConfig(
-            system_instruction=PROMPTS[current_mode]
-        )
-    )
+    history_contents.clear()
     await ctx.send("🧹 История диалога полностью очищена!")
 
 # --- Обработка сообщений ---
@@ -118,23 +99,46 @@ async def on_message(message: discord.Message):
     if message.author == bot.user:
         return
 
-    # Обязательно сначала обрабатываем команды (!toxic, !cc и т.д.)
     await bot.process_commands(message)
 
-    # Общение только в целевом канале
     if message.channel.id == TARGET_CHANNEL_ID and not message.content.startswith("!"):
         try:
             async with message.channel.typing():
-                chat = get_or_create_chat()
-                prompt = f"{message.author.display_name}: {message.content}"
+                user_text = f"{message.author.display_name}: {message.content}"
                 
-                # Вызываем генерацию ответа в отдельном потоке (asyncio.to_thread), 
-                # чтобы не блокировать выполнение бота
-                response = await asyncio.to_thread(chat.send_message, prompt)
+                # Добавляем сообщение пользователя в историю
+                history_contents.append(
+                    types.Content(role="user", parts=[types.Part.from_text(text=user_text)])
+                )
 
-                if response.text:
-                    await message.channel.send(response.text)
+                # Настройка генерации с учетом инструкции, фильтров и модели
+                config = types.GenerateContentConfig(
+                    system_instruction=PROMPTS[current_mode],
+                    safety_settings=SAFETY_SETTINGS,
+                )
+
+                # Используем нативный асинхронный клиент gemini_client.aio
+                response = await gemini_client.aio.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=history_contents,
+                    config=config
+                )
+
+                reply_text = response.text if response.text else ""
+
+                if reply_text:
+                    # Добавляем ответ бота в историю диалога
+                    history_contents.append(
+                        types.Content(role="model", parts=[types.Part.from_text(text=reply_text)])
+                    )
+
+                    # Отправляем ответ частями, если он больше 1900 символов
+                    for i in range(0, len(reply_text), 1900):
+                        await message.channel.send(reply_text[i:i+1900])
+                else:
+                    print("Ошибок нет, но модель вернула пустой результат.")
+
         except Exception as e:
-            print(f"Ошибка при ответе Gemini: {e}")
+            print(f"[КРИТИЧЕСКАЯ ОШИБКА GEMINI]: {e}")
 
 bot.run(os.getenv("DISCORD_TOKEN"))
